@@ -1,0 +1,26 @@
+# --- TERRAFORM ---
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfvars.json
+# Sauf le fichier d'exemple pour aider les autres (ou toi-même plus tard)
+!example.tfvars
+
+# --- SECRETS & CLES ---
+.devcontainer/local-secrets/
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# --- ANSIBLE ---
+ansible/inventory.ini
+.ansible_cache/
+*.retry
+
+# --- OS / IDE ---
+.DS_Store
+.idea/
+.vscode/*.log
+__pycache__/

@@ -1,0 +1,21 @@
+{
+  "name": "Proxmox IaC Admin",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "hashicorp.terraform",
+        "redhat.ansible",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  },
+  "remoteUser": "vscode",
+  "mounts": [
+    // Montage de ta clé privée (Source: ton PC, Target: le Container)
+    "source=${localWorkspaceFolder}/local-secrets/id_rsa_proxmox,target=/home/vscode/.ssh/id_rsa,type=bind,consistency=cached"
+  ],
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
+}
