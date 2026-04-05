@@ -1,17 +1,25 @@
 terraform {
   required_providers {
     proxmox = {
-      source  = "telmate/proxmox"
-      version = "3.0.1-rc1"
+      source  = "bpg/proxmox"
+      version = "0.100.0"
     }
   }
 }
 
 provider "proxmox" {
-  pm_api_url          = var.proxmox_api_url
-  # pm_api_token_id     = var.proxmox_api_id
-  # pm_api_token_secret = var.proxmox_api_secret
-  pm_user             = var.proxmox_api_user
-  pm_password         = var.proxmox_api_password
-  pm_tls_insecure     = true
+  endpoint  = var.proxmox_api_url
+  api_token = "${var.proxmox_api_id}=${var.proxmox_api_secret}"
+  insecure  = true
+
+  ssh {
+    agent       = false
+    username    = "root"
+    private_key = file("/home/vscode/.ssh/id_rsa")
+
+    node {
+      name    = "node1"
+      address = "10.0.10.10" # L'IP de ton Proxmox
+    }
+  }
 }
