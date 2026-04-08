@@ -4,7 +4,7 @@ ARG TERRAFORM_VERSION=1.8.5
 
 # Installation des outils système
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl unzip git openssh-client python3-pip \
+    curl unzip git openssh-client python3-pip iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 # Installation Terraform
