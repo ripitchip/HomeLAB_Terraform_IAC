@@ -22,22 +22,23 @@ variable "reg_config" {
     disk     = number
   })
 }
-variable "lldap_search_user" {
-  type        = string
-  description = "L'UID de l'utilisateur utilisé par Harbor pour interroger le LDAP (ex: thomas ou harbor_svc)"
+
+variable "nexus_version" {
+  type    = string
+  default = "3.91.0-01"
 }
 
+variable "nas_path" {
+  type    = string
+  default = "/mnt/data/infra_storage/reg_data"
+}
+
+variable "lldap_search_user" { type = string }
 variable "lldap_search_password" {
   type      = string
   sensitive = true
 }
 
-variable "harbor_admin_password" {
-  type      = string
-  sensitive = true
-}
-
-# On simplifie l'objet ldap_config (on enlève search_dn qui est construit dynamiquement)
 variable "ldap_config" {
   type = object({
     url            = string

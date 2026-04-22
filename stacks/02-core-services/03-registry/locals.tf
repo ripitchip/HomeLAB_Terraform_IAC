@@ -1,5 +1,5 @@
 locals {
-  harbor_cloud_init = <<EOT
+  nexus_cloud_init = <<EOT
 #cloud-config
 hostname: ${var.reg_config.hostname}
 
@@ -10,90 +10,110 @@ users:
 
 runcmd:
   - exec > /var/log/infra-setup.log 2>&1
-  - echo "--- Starting Automated Senior Harbor Deploy ---"
+  - echo "--- Starting Automated Senior Nexus 3.91.0-07 Deploy ---"
   
-  # 1. FIX DNS & INSTALL
+  # 1. FIX DNS & SSH
   - systemctl stop systemd-resolved || true
   - systemctl disable systemd-resolved || true
   - echo "nameserver ${var.reg_config.dns}" > /etc/resolv.conf
+  - echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+  - mkdir -p /root/.ssh && chmod 700 /root/.ssh
+  - echo "${trimspace(var.ssh_public_key)}" >> /root/.ssh/authorized_keys
+
+  # 2. INSTALL DEPS (Java 17 est la version stable recommandée pour Nexus 3.x)
   - apt-get update
-  - apt-get install -y nfs-common docker.io docker-compose jq tar wget curl openssl
-  - systemctl enable --now docker
+  - apt-get install -y nfs-common openjdk-17-jre-headless jq tar wget curl
 
-  # 2. MONTAGE NAS (Sécurisé)
-  - mkdir -p /data
-  - echo "${var.nas_ip}:/mnt/data/infra_storage/reg_data /data nfs defaults,nolock 0 0" >> /etc/fstab
-  - mount -a || echo "NFS Mount failed"
-  
-  # 3. PREP STRUCTURE & BIND MOUNT (Le secret anti-erreur chown)
-  - if mountpoint -q /data; then mkdir -p /data/harbor/registry /data/harbor/database /data/harbor/redis /data/harbor/logs; fi
-  - mkdir -p /var/lib/harbor_local/ca_download /data/ca_download
-  - mountpoint -q /data/ca_download || mount --bind /var/lib/harbor_local/ca_download /data/ca_download
-  - chmod -R 777 /data/harbor
-  - chmod 777 /var/lib/harbor_local/ca_download
-
-  # 4. SCRIPT DE DEPLOIEMENT HYBRIDE + AUTO-LDAP
+  # 3. PREP & MOUNT NFS
+  - mkdir -p /opt/sonatype/nexus-data
   - |
-    cat <<'EOF' > /usr/local/bin/deploy-harbor.sh
+    if ! grep -q "/opt/sonatype/nexus-data" /etc/fstab; then
+      echo "${var.nas_ip}:${var.nas_path} /opt/sonatype/nexus-data nfs defaults,nolock,noatime,nfsvers=4.1,_netdev 0 0" >> /etc/fstab
+    fi
+  - mount -a || (sleep 5 && mount -t nfs -o nolock ${var.nas_ip}:${var.nas_path} /opt/sonatype/nexus-data)
+
+  # 4. SCRIPT DE DEPLOIEMENT
+  - |
+    cat <<'EOF' > /usr/local/bin/deploy-nexus.sh
     #!/bin/bash
-    set -e
-    cd /tmp
-    VERSION=$(curl -s https://api.github.com/repos/goharbor/harbor/releases/latest | jq -r .tag_name)
-    wget -q --show-progress https://github.com/goharbor/harbor/releases/download/$${VERSION}/harbor-offline-installer-$${VERSION}.tgz
-    tar zxf harbor-offline-installer-$${VERSION}.tgz
-    cd harbor
+    NX_VER="3.91.0-07"
+    INSTALL_DIR="/opt/sonatype"
+    DATA_DIR="/opt/sonatype/nexus-data"
     
-    cp harbor.yml.tmpl harbor.yml
-    sed -i "s|hostname: .*|hostname: ${var.reg_config.fqdn}|g" harbor.yml
-    sed -i "s|data_volume: .*|data_volume: /var/lib/harbor|g" harbor.yml
+    # Création utilisateur nexus
+    id -u nexus &>/dev/null || useradd -r -d $DATA_DIR -s /sbin/nologin nexus
     
-    # Bypass HTTPS
-    sed -i 's/^https:/#https:/' harbor.yml
-    sed -i 's/^  port: 443/#  port: 443/' harbor.yml
-    sed -i 's/^  certificate:/#  certificate:/' harbor.yml
-    sed -i 's/^  private_key:/#  private_key:/' harbor.yml
+    echo "Downloading Nexus $NX_VER..."
+    mkdir -p $INSTALL_DIR
+    cd $INSTALL_DIR
+    wget -q --no-check-certificate "https://download.sonatype.com/nexus/3/nexus-$NX_VER-linux-x86_64.tar.gz" -O nexus.tar.gz
+    
+    echo "Extracting..."
+    tar -xf nexus.tar.gz
+    [ -d "nexus" ] && rm -rf "nexus"
+    mv nexus-$NX_VER nexus
+    rm nexus.tar.gz
 
-    ./install.sh
+    # Configuration du runtime
+    echo 'run_as_user="nexus"' > $INSTALL_DIR/nexus/bin/nexus.rc
 
-    # Bascule des volumes sur le NAS NFS
-    cd /tmp/harbor
-    docker compose stop
-    [ -d "/var/lib/harbor/registry" ] && rm -rf /var/lib/harbor/registry
-    [ -d "/var/lib/harbor/database" ] && rm -rf /var/lib/harbor/database
-    ln -sf /data/harbor/registry /var/lib/harbor/registry
-    ln -sf /data/harbor/database /var/lib/harbor/database
-    docker compose start
+    # VMOptions optimisées
+    cat <<EOC > $INSTALL_DIR/nexus/bin/nexus.vmoptions
+    -Xms4096m
+    -Xmx4096m
+    -XX:MaxDirectMemorySize=4096m
+    -Djava.net.preferIPv4Stack=true
+    -Dkaraf.home=.
+    -Dkaraf.base=.
+    -Dkaraf.etc=etc/karaf
+    -Djava.io.tmpdir=$DATA_DIR/nexus3/tmp
+    -Dkaraf.data=$DATA_DIR/nexus3
+    -Dkaraf.log=$DATA_DIR/nexus3/log
+    -Djava.util.logging.config.file=etc/karaf/java.util.logging.properties
+    -XX:+UnlockExperimentalVMOptions
+    -XX:+UseG1GC
+    EOC
 
-    # 5. CONFIGURATION LDAP DYNAMIQUE (FORCED PLAIN)
-    echo "Waiting for Harbor API to be operational..."
-    until curl -s -u "admin:${var.harbor_admin_password}" http://localhost/api/v2.0/systeminfo > /dev/null; do
-        sleep 5
+    mkdir -p $DATA_DIR/nexus3/tmp
+    chown -R nexus:nexus $INSTALL_DIR
+    chown -R nexus:nexus $DATA_DIR
+
+    # Systemd Service
+    cat <<EOS > /etc/systemd/system/nexus.service
+    [Unit]
+    Description=Sonatype Nexus Repository Service
+    After=network.target remote-fs.target
+    [Service]
+    Type=forking
+    LimitNOFILE=65536
+    ExecStart=$INSTALL_DIR/nexus/bin/nexus start
+    ExecStop=$INSTALL_DIR/nexus/bin/nexus stop
+    User=nexus
+    Restart=always
+    [Install]
+    WantedBy=multi-user.target
+    EOS
+
+    systemctl daemon-reload
+    systemctl enable --now nexus
+
+    echo "Waiting for Nexus startup..."
+    for i in {1..30}; do
+      if [ -f $DATA_DIR/nexus3/admin.password ]; then
+        cp $DATA_DIR/nexus3/admin.password /root/nexus_init_pass.txt
+        echo "--- Nexus Ready (New Install) ---"
+        exit 0
+      fi
+      if curl -s -I http://localhost:8081 | grep -q "200 OK"; then
+        echo "--- Nexus Ready (Already Configured) ---"
+        exit 0
+      fi
+      echo "Checking Nexus status ($i/30)..."
+      sleep 10
     done
-
-    echo "Injecting LDAP Configuration (TLS Disabled) for user: ${var.lldap_search_user}"
-    curl -s -u "admin:${var.harbor_admin_password}" -X PUT -H "Content-Type: application/json" \
-      -d '{
-        "auth_mode": "ldap_auth",
-        "ldap_url": "${var.ldap_config.url}",
-        "ldap_base_dn": "ou=people,${var.ldap_config.base_dn}",
-        "ldap_uid": "uid",
-        "ldap_search_dn": "uid=${var.lldap_search_user},ou=people,${var.ldap_config.base_dn}",
-        "ldap_search_password": "${var.lldap_search_password}",
-        "ldap_filter": "(objectclass=person)",
-        "ldap_scope": 2,
-        "ldap_verify_cert": false,
-        "ldap_starttls": false,
-        "ldap_group_base_dn": "${var.ldap_config.group_base_dn}",
-        "ldap_group_filter": "(objectclass=groupOfNames)",
-        "ldap_group_gid": "cn",
-        "ldap_group_admin_dn": "${var.ldap_config.group_admin_dn}",
-        "ldap_group_membership": "memberof"
-      }' "http://localhost/api/v2.0/configurations"
-    
-    echo "--- Setup Harbor + LDAP Ready ---"
     EOF
-    
-  - chmod +x /usr/local/bin/deploy-harbor.sh
-  - /usr/local/bin/deploy-harbor.sh
+
+  - chmod +x /usr/local/bin/deploy-nexus.sh
+  - /usr/local/bin/deploy-nexus.sh
 EOT
 }
