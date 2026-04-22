@@ -24,3 +24,5 @@ ansible/inventory.ini
 .idea/
 .vscode/*.log
 __pycache__/
+
+.terraform.lock.hcl
