@@ -1,0 +1,28 @@
+---
+- name: Execute join command on nodes
+  ansible.builtin.command: "{{ hostvars['k8s-master-01'].join_command }}"
+  args:
+    creates: /etc/kubernetes/kubelet.conf
+
+- name: Label nodes as workers
+  ansible.builtin.command: "kubectl label node {{ item }} node-role.kubernetes.io/worker=worker --overwrite"
+  delegate_to: k8s-master-01
+  loop: "{{ groups['workers'] }}"
+  run_once: true
+  register: worker_labels
+  changed_when: "'labeled' in worker_labels.stdout"
+
+- name: Label secondary masters
+  ansible.builtin.command: "kubectl label node {{ item }} node-role.kubernetes.io/control-plane= --overwrite"
+  delegate_to: k8s-master-01
+  loop:
+    - k8s-master-02
+    - k8s-master-03
+  run_once: true
+  register: master_labels
+  changed_when: "'labeled' in master_labels.stdout"
+
+- name: Restart kubelet to ensure CNI detection
+  ansible.builtin.systemd:
+    name: kubelet
+    state: restarted

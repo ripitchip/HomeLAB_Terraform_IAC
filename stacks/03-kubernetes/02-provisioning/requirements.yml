@@ -1,0 +1,6 @@
+# 02-provisioning/requirements.yml
+roles:
+  - name: geerlingguy.containerd
+    version: 1.4.1
+  - name: geerlingguy.kubernetes
+    version: 4.0.2

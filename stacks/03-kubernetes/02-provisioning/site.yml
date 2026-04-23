@@ -1,0 +1,43 @@
+---
+# ÉTAPE 1 : Préparation initiale
+- name: 1. Pre-requisites (All nodes)
+  hosts: k8s
+  become: true
+  tasks:
+    - name: Install and Sync CNI Plugins
+      ansible.builtin.import_tasks: tasks/cni_plugins.yml
+
+# ÉTAPE 2 : Initialisation Master
+- name: 2. Initialize Control Plane (Master 01)
+  hosts: masters
+  become: true
+  tasks:
+    - name: Bootstrap Kubernetes Cluster
+      ansible.builtin.import_tasks: tasks/master_init.yml
+
+# ÉTAPE 3 : Join des autres nœuds
+- name: 3. Join Nodes
+  hosts: workers, k8s-master-02, k8s-master-03
+  become: true
+  tasks:
+    - name: Join cluster and set roles
+      ansible.builtin.import_tasks: tasks/nodes_join.yml
+
+# ÉTAPE RECOUVREMENT (C'est ton idée, et elle est top)
+- name: 4. Final CNI Sync & Restart (Ensure everything is green)
+  hosts: k8s
+  become: true
+  tasks:
+    - name: Force Sync CNI and Restart Kubelet
+      ansible.builtin.shell: |
+        cp -r /opt/cni/bin/* /usr/lib/cni/
+        systemctl restart kubelet
+      changed_when: true
+
+# ÉTAPE BOOTSTRAP APPLICATIF
+- name: 5. Deploy ArgoCD, Traefik & Vault
+  hosts: k8s-master-01
+  become: true
+  tasks:
+    - name: Cluster Bootstrap
+      ansible.builtin.import_tasks: tasks/cluster_bootstrap.yml

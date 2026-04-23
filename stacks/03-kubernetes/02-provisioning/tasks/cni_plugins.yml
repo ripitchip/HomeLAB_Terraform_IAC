@@ -1,0 +1,30 @@
+---
+- name: Install CNI binaries
+  ansible.builtin.apt:
+    name:
+      - kubernetes-cni
+      - containernetworking-plugins
+    state: present
+
+- name: Ensure /usr/lib/cni directory exists
+  ansible.builtin.file:
+    path: /usr/lib/cni
+    state: directory
+    mode: '0755'
+
+- name: Sync CNI plugins from /opt/cni/bin to /usr/lib/cni
+  ansible.builtin.shell: cp -r /opt/cni/bin/* /usr/lib/cni/
+  register: sync_result
+  changed_when: false
+
+- name: Check if kubelet service exists
+  ansible.builtin.stat:
+    path: /etc/systemd/system/kubelet.service
+  register: kubelet_service_file
+
+- name: Restart kubelet to ensure CNI detection
+  ansible.builtin.systemd:
+    name: kubelet
+    state: restarted
+    daemon_reload: true
+  when: kubelet_service_file.stat.exists

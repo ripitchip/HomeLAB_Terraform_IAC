@@ -1,0 +1,36 @@
+---
+- name: Add Local Nexus Helm repositories
+  ansible.builtin.shell:
+    cmd: |
+      helm repo add argo https://registry.foobarbaz.lan/repository/helm-argo/ --force-update --insecure-skip-tls-verify
+      helm repo add hashicorp https://registry.foobarbaz.lan/repository/helm-hashicorp/ --force-update --insecure-skip-tls-verify
+      helm repo add traefik https://registry.foobarbaz.lan/repository/helm-traefik/ --force-update --insecure-skip-tls-verify
+      helm repo update
+  changed_when: false
+
+- name: Deploy ArgoCD via Nexus
+  ansible.builtin.command: >-
+    helm upgrade --install argocd argo/argo-cd
+    --namespace argocd --create-namespace
+    --set server.service.type=ClusterIP
+    --insecure-skip-tls-verify
+  register: argocd_res
+  changed_when: "'deployed' in argocd_res.stdout or 'synchronized' in argocd_res.stdout"
+
+- name: Deploy Traefik (API Gateway) via Nexus
+  ansible.builtin.command: >-
+    helm upgrade --install traefik traefik/traefik
+    --namespace traefik --create-namespace
+    --set service.type=NodePort
+    --insecure-skip-tls-verify
+  register: traefik_res
+  changed_when: "'deployed' in traefik_res.stdout or 'synchronized' in traefik_res.stdout"
+
+- name: Deploy Vault Agent Injector via Nexus
+  ansible.builtin.command: >-
+    helm upgrade --install vault hashicorp/vault
+    --namespace vault --create-namespace
+    --set "injector.externalVaultAddr=https://vault.foobarbaz.lan"
+    --insecure-skip-tls-verify
+  register: vault_res
+  changed_when: "'deployed' in vault_res.stdout or 'synchronized' in vault_res.stdout"
