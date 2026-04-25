@@ -1,0 +1,85 @@
+# tasks/vault_integration.yml
+
+- name: Setup Vault Reviewer RBAC in Kubernetes
+  ansible.builtin.shell:
+    cmd: |
+      kubectl apply -f - <<EOF
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: vault-reviewer
+        namespace: vault
+      ---
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: vault-reviewer-token
+        namespace: vault
+        annotations:
+          kubernetes.io/service-account.name: vault-reviewer
+      type: kubernetes.io/service-account-token
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: role-tokenreview-binding
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: system:auth-delegator
+      subjects:
+        - kind: ServiceAccount
+          name: vault-reviewer
+          namespace: vault
+      EOF
+  changed_when: false
+
+- name: Extract K8s credentials for Vault configuration
+  ansible.builtin.shell:
+    cmd: |
+      TOKEN=$(kubectl get secret vault-reviewer-token -n vault -o jsonpath='{.data.token}' | base64 -d)
+      CA_CERT=$(kubectl get secret vault-reviewer-token -n vault -o jsonpath='{.data.ca\.crt}' | base64 -d)
+      echo "$TOKEN|$CA_CERT"
+  register: k8s_vault_data
+  changed_when: false
+  no_log: true
+
+- name: Set Vault configuration facts
+  ansible.builtin.set_fact:
+    injected_token: "{{ k8s_vault_data.stdout.split('|')[0] }}"
+    injected_ca: "{{ k8s_vault_data.stdout.split('|')[1] }}"
+    k8s_host: "https://{{ ansible_host }}:6443"
+
+- name: Configure Kubernetes Auth Method on Vault Server (Remote)
+  delegate_to: localhost
+  environment:
+    VAULT_ADDR: "{{ vault_url }}"
+    VAULT_TOKEN: "{{ vault_root_token }}"
+    VAULT_SKIP_VERIFY: "true"      # Ignore les erreurs SSL de ton lab
+    VAULT_DISABLE_MLOCK: "true"   # Évite les erreurs de privilèges dans Docker
+  ansible.builtin.shell:
+    cmd: |
+      vault auth enable kubernetes || true
+      vault write auth/kubernetes/config \
+        token_reviewer_jwt="{{ injected_token }}" \
+        kubernetes_host="{{ k8s_host }}" \
+        kubernetes_ca_cert="{{ injected_ca }}" \
+        disable_iss_validation=true
+  no_log: false  # Désactivé pour débugger l'erreur actuelle
+
+- name: Create Vault Policy and Role for Home Application
+  delegate_to: localhost
+  environment:
+    VAULT_ADDR: "{{ vault_url }}"
+    VAULT_TOKEN: "{{ vault_root_token }}"
+    VAULT_SKIP_VERIFY: "true"
+    VAULT_DISABLE_MLOCK: "true"
+  ansible.builtin.shell: |
+    echo 'path "secret/data/home-config" { capabilities = ["read"] }' | vault policy write policy-home -
+    vault write auth/kubernetes/role/role-home \
+        bound_service_account_names="sa-home-app" \
+        bound_service_account_namespaces="home" \
+        policies="policy-home" \
+        alias_name_source="serviceaccount_name" \
+        ttl="24h"
+  changed_when: true

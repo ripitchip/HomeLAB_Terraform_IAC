@@ -41,3 +41,5 @@
   tasks:
     - name: Cluster Bootstrap
       ansible.builtin.import_tasks: tasks/cluster_bootstrap.yml
+    - name: Vault Security Integration (RBAC & Auth Config)
+      ansible.builtin.import_tasks: tasks/vault_integration.yml
